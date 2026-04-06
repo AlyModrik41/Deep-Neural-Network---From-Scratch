@@ -1,0 +1,81 @@
+from flask import Flask, render_template, request, jsonify
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from mlp import forward_step, compute_errors, update_weights, confusion_matrix, accuracy
+
+app = Flask(__name__)
+
+# ── DATA ──────────────────────────────────────────────
+df = pd.read_csv('df_encoded.csv')
+X = df.drop(columns=['Species'])
+y = df['Species']
+class_names = ['Adelie', 'Chinstrap', 'Gentoo']
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.4, random_state=42, stratify=y)
+
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+@app.route('/train', methods=['POST'])
+def train():
+    data        = request.json
+    neurons_list = [int(n.strip()) for n in data['neurons'].split(',')]
+    eta          = float(data['eta'])
+    epochs       = int(data['epochs'])
+    b_use        = data['bias']
+    activation   = data['activation']
+
+    architecture_list = [X_train.shape[1]] + neurons_list + [3]
+    one_hot_vector    = pd.get_dummies(y_train).values
+    weights = []
+    bias    = []
+
+    for i in range(1, len(architecture_list)):
+        weights.append(np.random.randn(architecture_list[i], architecture_list[i-1]) * 0.01)
+        bias.append(np.zeros((architecture_list[i], 1)))
+
+    # training loop
+    for j in range(epochs):
+        for i in range(len(X_train)):
+            sample         = X_train.iloc[i].values.astype(float).reshape(-1, 1)
+            sample_one_hot = one_hot_vector[i].reshape(-1, 1)
+            acc_array      = forward_step(sample, weights, bias, activation, b_use)
+            errors         = compute_errors(weights, acc_array, sample_one_hot, activation)
+            weights, bias  = update_weights(weights, acc_array, errors, eta, bias, b_use)
+
+    # test
+    one_hot_test = pd.get_dummies(y_test).values
+    predict      = []
+    for i in range(len(X_test)):
+        sample    = X_test.iloc[i].values.astype(float).reshape(-1, 1)
+        acc_array = forward_step(sample, weights, bias, activation, b_use)
+        predict.append(int(np.argmax(acc_array[-1])))
+
+    # train accuracy
+    train_predict = []
+    for i in range(len(X_train)):
+        sample    = X_train.iloc[i].values.astype(float).reshape(-1, 1)
+        acc_array = forward_step(sample, weights, bias, activation, b_use)
+        train_predict.append(int(np.argmax(acc_array[-1])))
+
+    true_labels = list(np.argmax(one_hot_test, axis=1))
+    true_train  = list(np.argmax(one_hot_vector, axis=1))
+
+    train_acc = accuracy(true_train, train_predict)
+    test_acc  = accuracy(true_labels, predict)
+    cm        = confusion_matrix(true_labels, predict, len(class_names))
+
+    return jsonify({
+        'train_acc'  : round(train_acc, 2),
+        'test_acc'   : round(test_acc, 2),
+        'cm'         : cm,
+        'class_names': class_names,
+        'neurons'    : neurons_list,
+        'activation' : activation
+    })
+
+if __name__ == '__main__':
+    app.run(debug=True)
